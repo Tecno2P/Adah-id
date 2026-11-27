@@ -89,7 +89,31 @@ body{-webkit-tap-highlight-color:transparent}
 @keyframes edIn{from{opacity:0;translate:0 28px;scale:.98}to{opacity:1;translate:0 0;scale:1}}
 @keyframes edOut{to{opacity:0;translate:0 28px;scale:.98}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
-@media print{*,*::before,*::after{animation:none!important;transition:none!important}.adv{display:none!important}}
+.tabs{display:flex;gap:8px;padding:8px 12px;background:var(--surface);border-bottom:1px solid var(--line)}
+.tabs button{flex:1}
+.pane-off{display:none!important}
+.upd{display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;padding:10px 12px;background:#1f6feb;color:#fff;font-size:14px;font-weight:600}
+.upd button{background:#fff;color:#1f6feb;border-color:#fff;font-weight:700}
+.ver{padding:6px 12px 22px;color:var(--muted);font-size:12px;text-align:center}
+.nui{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 12px;background:var(--surface);border-bottom:1px solid var(--line);font-size:14px}
+.nui input[type=range]{flex:1;min-width:120px}
+.thumbs{display:flex;gap:8px;overflow-x:auto;padding:8px 12px;background:var(--surface);border-bottom:1px solid var(--line)}
+.thumb{flex:none;display:flex;flex-direction:column;gap:4px;align-items:center}
+.thumb img{width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid var(--line)}
+.thumb div{display:flex;gap:4px}
+.thumb button{padding:2px 8px;font-size:12px}
+.npages{display:flex;flex-direction:column;align-items:center;gap:12px;padding:12px}
+.nwrap{overflow:hidden;flex:none}
+.nscaler{transform-origin:top left;width:210mm}
+.npage{position:relative;width:210mm;height:297mm;background:#fff;box-shadow:0 2px 12px rgba(0,0,0,.25);display:grid;overflow:hidden}
+.ncell{position:relative;overflow:hidden}
+.ncell img{position:absolute;left:50%;top:50%;pointer-events:none}
+@media print{*,*::before,*::after{animation:none!important;transition:none!important}.adv,.tabs,.nui,.thumbs,.upd,.ver{display:none!important}
+ .npages{display:block!important;padding:0!important;gap:0!important}
+ .nwrap{width:auto!important;height:auto!important;overflow:visible!important;break-after:page;page-break-after:always}
+ .nwrap:last-child{break-after:auto;page-break-after:auto}
+ .nscaler{transform:none!important;width:auto!important;height:auto!important}
+ .npage{box-shadow:none!important;margin:0!important;height:296.6mm!important}}
 @page{size:A4;margin:0}
 @media print{
  html,body{background:#fff!important}
@@ -415,6 +439,133 @@ const BW0 = 85.6, BH0 = 54, GAP = 10, MAXN = 32, TOP = 16;
 const blank = () => Array(MAXN).fill(null);
 
 const isImg = f => !!f && (/^image\//.test(f.type) || /\.(jpe?g|png|webp|gif|bmp|heic|heif)$/i.test(f.name || ""));
+const APP_VER = "6";
+const LS_KEY = "aadhaarPrint.settings";
+const loadSet = () => { try { const o = JSON.parse(localStorage.getItem(LS_KEY) || "{}"); return (o && typeof o === "object") ? o : {}; } catch (e) { return {}; } };
+const num = (v, lo, hi, d) => (typeof v === "number" && isFinite(v)) ? Math.min(hi, Math.max(lo, v)) : d;
+
+// --- AUTOCROP START: photo me card dhoondh kar seedha + crop karne ke parameters nikalta hai
+function otsuT(g) {
+  const hist = new Uint32Array(256); for (let i = 0; i < g.length; i++) hist[g[i]]++;
+  const n = g.length; let sum = 0; for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let sB = 0, wB = 0, best = -1, bt = 127;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t]; if (!wB) continue; const wF = n - wB; if (!wF) break;
+    sB += t * hist[t]; const mB = sB / wB, mF = (sum - sB) / wF, v = wB * wF * (mB - mF) * (mB - mF);
+    if (v > best) { best = v; bt = t; }
+  }
+  return bt;
+}
+function hullOf(pts) {
+  pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo = [], up = [];
+  for (const p of pts) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+  for (let i = pts.length - 1; i >= 0; i--) { const p = pts[i]; while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
+  up.pop(); lo.pop(); return lo.concat(up);
+}
+function polyArea(H) { let a = 0; for (let i = 0; i < H.length; i++) { const p = H[i], q = H[(i + 1) % H.length]; a += p[0] * q[1] - q[0] * p[1]; } return Math.abs(a) / 2; }
+function minRect(H) {
+  let best = null;
+  for (let i = 0; i < H.length; i++) {
+    const a = H[i], b = H[(i + 1) % H.length], th = Math.atan2(b[1] - a[1], b[0] - a[0]), c = Math.cos(th), s = Math.sin(th);
+    let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+    for (const p of H) { const u = p[0] * c + p[1] * s, v = -p[0] * s + p[1] * c; if (u < x0) x0 = u; if (u > x1) x1 = u; if (v < y0) y0 = v; if (v > y1) y1 = v; }
+    const w = x1 - x0, hh = y1 - y0, area = w * hh;
+    if (!best || area < best.area) best = { area, th, x0, x1, y0, y1, w, hh, c, s };
+  }
+  const mu = (best.x0 + best.x1) / 2, mv = (best.y0 + best.y1) / 2;
+  const cx = mu * best.c - mv * best.s, cy = mu * best.s + mv * best.c;
+  let L = best.w, S = best.hh, ang = best.th;
+  if (S > L) { const t = L; L = S; S = t; ang += Math.PI / 2; }
+  while (ang > Math.PI / 2) ang -= Math.PI;
+  while (ang <= -Math.PI / 2) ang += Math.PI;
+  return { cx, cy, L, S, ang, area: best.area };
+}
+function morph(m, w, h, grow) {
+  const o = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let hit = grow ? 0 : 1;
+    for (let dy = -1; dy <= 1 && (grow ? !hit : hit); dy++) for (let dx = -1; dx <= 1; dx++) {
+      const xx = x + dx, yy = y + dy, v = (xx < 0 || yy < 0 || xx >= w || yy >= h) ? 0 : m[yy * w + xx];
+      if (grow) { if (v) { hit = 1; break; } } else if (!v) { hit = 0; break; }
+    }
+    o[y * w + x] = hit;
+  }
+  return o;
+}
+function detectCard(g0, w, h) {
+  const n = w * h, g = new Uint8ClampedArray(n);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let a = 0, c = 0;
+    for (let dy = -1; dy <= 1; dy++) { const yy = y + dy; if (yy < 0 || yy >= h) continue; for (let dx = -1; dx <= 1; dx++) { const xx = x + dx; if (xx < 0 || xx >= w) continue; a += g0[yy * w + xx]; c++; } }
+    g[y * w + x] = a / c;
+  }
+  const t = otsuT(g); let best = null;
+  for (let pol = 0; pol < 2; pol++) {
+    let m = new Uint8Array(n);
+    for (let i = 0; i < n; i++) m[i] = (pol ? g[i] > t : g[i] <= t) ? 1 : 0;
+    m = morph(morph(m, w, h, false), w, h, true);
+    const lab = new Int32Array(n), areas = [0], stack = new Int32Array(n);
+    let nl = 0;
+    for (let i = 0; i < n; i++) {
+      if (!m[i] || lab[i]) continue;
+      nl++; let sp = 0, ar = 0; stack[sp++] = i; lab[i] = nl;
+      while (sp) {
+        const k = stack[--sp]; ar++; const x = k % w, y = (k / w) | 0;
+        if (x > 0 && m[k - 1] && !lab[k - 1]) { lab[k - 1] = nl; stack[sp++] = k - 1; }
+        if (x < w - 1 && m[k + 1] && !lab[k + 1]) { lab[k + 1] = nl; stack[sp++] = k + 1; }
+        if (y > 0 && m[k - w] && !lab[k - w]) { lab[k - w] = nl; stack[sp++] = k - w; }
+        if (y < h - 1 && m[k + w] && !lab[k + w]) { lab[k + w] = nl; stack[sp++] = k + w; }
+      }
+      areas.push(ar);
+    }
+    const big = {};
+    for (let l = 1; l <= nl; l++) if (areas[l] >= 0.05 * n && areas[l] <= 0.88 * n) big[l] = { rmin: new Int32Array(h).fill(1e9), rmax: new Int32Array(h).fill(-1), cmin: new Int32Array(w).fill(1e9), cmax: new Int32Array(w).fill(-1), area: areas[l] };
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const b = big[lab[y * w + x]]; if (!b) continue;
+      if (x < b.rmin[y]) b.rmin[y] = x; if (x > b.rmax[y]) b.rmax[y] = x;
+      if (y < b.cmin[x]) b.cmin[x] = y; if (y > b.cmax[x]) b.cmax[x] = y;
+    }
+    for (const l in big) {
+      const b = big[l], pts = [], seen = new Set();
+      const add = (x, y) => { const k = x * 100000 + y; if (!seen.has(k)) { seen.add(k); pts.push([x, y]); } };
+      for (let y = 0; y < h; y++) if (b.rmax[y] >= 0) { add(b.rmin[y], y); add(b.rmax[y], y); }
+      for (let x = 0; x < w; x++) if (b.cmax[x] >= 0) { add(x, b.cmin[x]); add(x, b.cmax[x]); }
+      if (pts.length < 6) continue;
+      const H = hullOf(pts); if (H.length < 3) continue;
+      const r = minRect(H); if (r.S < 0.15 * Math.min(w, h) || r.area <= 0) continue;
+      const rectness = polyArea(H) / r.area, ratio = r.L / r.S, af = r.area / n;
+      const asp = Math.exp(-0.5 * Math.pow(Math.log(ratio / 1.585) / 0.22, 2));
+      const score = Math.pow(rectness, 4) * asp * Math.sqrt(Math.min(af, 0.9));
+      if (rectness >= 0.8 && af < 0.94 && (!best || score > best.score)) best = { ...r, score, rectness };
+    }
+  }
+  return (best && best.score >= 0.25) ? best : null;
+}
+function paramsFromRect(r, w, h, iw, ih) {
+  const W = 1200, H = 757, kx = iw / w, ky = ih / h;
+  const L = r.L * kx, S = r.S * kx;
+  const th = -r.ang * 180 / Math.PI;
+  let rot = 0, ang = th;
+  if (th > 45) { rot = 1; ang = th - 90; } else if (th < -45) { rot = 3; ang = th + 90; }
+  const odd = rot % 2 !== 0, a = odd ? ih : iw, b = odd ? iw : ih, base = Math.min(W / a, H / b);
+  const s = Math.max(W / L, H / S) * 1.02;
+  const vx = r.cx * kx - iw / 2, vy = r.cy * ky - ih / 2, t = th * Math.PI / 180;
+  const ux = s * (vx * Math.cos(t) - vy * Math.sin(t)), uy = s * (vx * Math.sin(t) + vy * Math.cos(t));
+  return { rot, ang, zoom: Math.min(8, Math.max(0.2, s / base)), ox: -ux / W, oy: -uy / H };
+}
+// --- AUTOCROP END
+function autoParams(img) {
+  const iw = img.naturalWidth, ih = img.naturalHeight, k = Math.min(1, 320 / Math.max(iw, ih));
+  const w = Math.max(8, Math.round(iw * k)), hh = Math.max(8, Math.round(ih * k));
+  const c = document.createElement("canvas"); c.width = w; c.height = hh;
+  const x = c.getContext("2d"); x.drawImage(img, 0, 0, w, hh);
+  const d = x.getImageData(0, 0, w, hh).data, g = new Uint8ClampedArray(w * hh);
+  for (let i = 0; i < g.length; i++) g[i] = .299 * d[4 * i] + .587 * d[4 * i + 1] + .114 * d[4 * i + 2];
+  const r = detectCard(g, w, hh);
+  return r ? paramsFromRect(r, w, hh, iw, ih) : null;
+}
 const calm = () => !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 
 function layoutOf(bw, gx, gy, mx) {
@@ -503,6 +654,7 @@ function Editor({ item, auto, onDone, onCancel }) {
   const [p, setP] = useState(() => item.p ? { ...item.p, rot: q4(item.p.rot + (item.rot || 0) / 90) } : { rot: q4((item.rot || 0) / 90), zoom: 1, ang: 0, ox: 0, oy: 0 });
   const [label, setLabel] = useState(item.label || "");
   const [leaving, setLeaving] = useState(false);
+  const [msg, setMsg] = useState("");
   const tw = useRef(0), twTo = useRef(null);
   const stopTw = () => { cancelAnimationFrame(tw.current); const t = twTo.current; if (t) { twTo.current = null; pRef.current = { ...pRef.current, ...t }; setP(q => ({ ...q, ...t })); } };
   useEffect(() => () => cancelAnimationFrame(tw.current), []);
@@ -588,6 +740,22 @@ function Editor({ item, auto, onDone, onCancel }) {
     setP(x => ({ ...x, rot: 0, ...from }));
     tween(from, to, 320);
   };
+  const goTo = (t, dur) => {
+    const q = pRef.current;
+    if (!img || calm()) return setP(x => ({ ...x, ...t }));
+    let a0 = q.rot * 90 + q.ang - t.rot * 90; a0 = t.ang + ((((a0 - t.ang) + 540) % 360) - 180);
+    const from = { zoom: baseS(q.rot) * q.zoom / baseS(t.rot), ang: a0, ox: q.ox, oy: q.oy };
+    setP(x => ({ ...x, rot: t.rot, ...from }));
+    tween(from, { zoom: t.zoom, ang: t.ang, ox: t.ox, oy: t.oy }, dur);
+  };
+  const autoFit = () => {
+    if (!img) return;
+    let r = null; try { r = autoParams(img); } catch (e) { r = null; }
+    if (!r) { setMsg("Card ka kinara nahi mila. Haath se seedha karein (photo mein card aur peeche ka rang alag dikhna chahiye)."); return; }
+    setMsg(""); stopTw();
+    setP(q => ({ ...q, enh: { ...(q.enh || ENH_OFF), on: true } }));
+    goTo(r, 380);
+  };
   const en = p.enh || null;
   const setE = f => setP(q => ({ ...q, enh: { ...(q.enh || ENH_OFF), ...f } }));
   const fill = () => {
@@ -617,8 +785,10 @@ function Editor({ item, auto, onDone, onCancel }) {
     h("div", { className: "edr" },
       h("button", { onClick: () => spin(-1) }, "\u27f2 90\u00b0"),
       h("button", { onClick: () => spin(1) }, "\u27f3 90\u00b0"),
+      h("button", { onClick: autoFit }, "\u26a1 Auto crop"),
       h("button", { onClick: fill }, "Box bhar do"),
       h("button", { onClick: reset }, "Reset")),
+    msg && h("div", { className: "note", style: { maxWidth: 640, width: "100%" } }, msg),
     h("div", { className: "enh" },
       h("div", { className: "edr" },
         h("label", { className: "chk" }, h("input", { type: "checkbox", checked: !!(en && en.on), onChange: e => { const v = e.target.checked; setP(q => ({ ...q, enh: { ...(q.enh || ENH_OFF), on: v } })); } }), "\u2728 Saaf karo (blur kam, print ke liye)"),
@@ -657,7 +827,7 @@ function Slot({ label, item, bw, bh, cut, sel, drag, off, idx, onFile, onFiles, 
   const camInput = h("input", { type: "file", accept: "image/*", capture: "environment", hidden: true, ref: cam,
     onChange: e => { read(e.target.files[0]); e.target.value = ""; } });
   const drop = { onDragOver: e => e.preventDefault(), onDrop: e => { e.preventDefault(); onFiles(e.dataTransfer.files); } };
-  const dim = { width: bw + "mm", height: bh + "mm", animationDelay: Math.min(idx || 0, 8) * 35 + "ms" };
+  const dim = { width: bw + "mm", height: bh + "mm", justifySelf: "center", alignSelf: "center", animationDelay: Math.min(idx || 0, 8) * 35 + "ms" };
   if (!item) {
     return h("div", { className: "slot empty" + (off ? " off" : ""), style: dim, ...drop },
       h("div", null, h("b", null, label), h("div", { className: "pick" },
@@ -683,22 +853,32 @@ function Slot({ label, item, bw, bh, cut, sel, drag, off, idx, onFile, onFiles, 
 }
 
 function App() {
+  const S0 = useRef(null); if (!S0.current) S0.current = loadSet(); const S = S0.current;
   const [items, setItems] = useState(blank);
   const [show, setShow] = useState(() => Array(MAXN).fill(true));
-  const [n, setN] = useState(4);
-  const [bw, setBw] = useState(BW0);
-  const [gx, setGx] = useState(GAP);
-  const [gy, setGy] = useState(GAP);
-  const [mx, setMx] = useState(5);
+  const [n, setN] = useState(() => Math.round(num(S.n, 1, MAXN, 4)));
+  const [bw, setBw] = useState(() => num(S.bw, 40, 190, BW0));
+  const [gx, setGx] = useState(() => num(S.gx, 0, 20, GAP));
+  const [gy, setGy] = useState(() => num(S.gy, 0, 30, GAP));
+  const [mx, setMx] = useState(() => num(S.mx, 0, 30, 5));
+  const [dw, setDw] = useState(() => Array.from({ length: MAXN }, (_, i) => num(Array.isArray(S.dw) ? S.dw[i] : 0, -100, 100, 0)));
+  const [sizeLock, setSizeLock] = useState(!!S.sizeLock);
+  const [autoOn, setAutoOn] = useState(S.autoOn !== false);
+  const [tab, setTab] = useState(S.tab === "normal" ? "normal" : "aadhaar");
+  const [np, setNp] = useState(() => ({ fit: (S.np && S.np.fit === "fill") ? "fill" : "fit", per: (S.np && [1, 2, 4].indexOf(S.np.per) >= 0) ? S.np.per : 1, margin: num(S.np && S.np.margin, 0, 40, 8) }));
+  const [npItems, setNpItems] = useState([]);
+  const [upd, setUpd] = useState(false);
+  const [chk, setChk] = useState("");
+  const lastChk = useRef(0), npFile = useRef(null), npCam = useRef(null);
   const [statOn, setStatOn] = useState(false);
   const statT = useRef(0);
-  const [cut, setCut] = useState(true);
+  const [cut, setCut] = useState(S.cut !== false);
   const [sel, setSel] = useState(-1);
-  const [locked, setLocked] = useState(false);
+  const [locked, setLocked] = useState(!!S.locked);
   const [dragI, setDragI] = useState(-1);
   const [edit, setEdit] = useState(-1);
   const [editAuto, setEditAuto] = useState(false);
-  const [showDate, setShowDate] = useState(true);
+  const [showDate, setShowDate] = useState(S.showDate !== false);
   const [scale, setScale] = useState(1);
   const multi = useRef(null);
   const today = new Date().toLocaleDateString("en-GB");
@@ -713,6 +893,25 @@ function App() {
     const fit = () => setScale(Math.min(1, (document.documentElement.clientWidth - 24) / sheetPx));
     fit(); window.addEventListener("resize", fit);
     return () => window.removeEventListener("resize", fit);
+  }, []);
+  useEffect(() => {
+    try { localStorage.setItem(LS_KEY, JSON.stringify({ n, bw, gx, gy, mx, dw, sizeLock, autoOn, tab, np, cut, locked, showDate })); } catch (e) {}
+  }, [n, bw, gx, gy, mx, dw, sizeLock, autoOn, tab, np, cut, locked, showDate]);
+  const checkUpdate = manual => {
+    if (typeof fetch !== "function") return;
+    if (navigator.onLine === false) { if (manual) setChk("Offline hain, internet chalu karein"); return; }
+    if (manual) setChk("Check ho raha hai...");
+    fetch("index.html", { cache: "no-store" }).then(r => r.text()).then(t => {
+      lastChk.current = Date.now();
+      const m = t.match(/APP_VER = "(\d+)"/);
+      if (m && m[1] !== APP_VER) { setUpd(true); setChk(""); } else if (manual) setChk("Aap latest version par hain \u2713");
+    }).catch(() => { if (manual) setChk("Check nahi ho paaya"); });
+  };
+  useEffect(() => {
+    const t = setTimeout(() => checkUpdate(false), 4000);
+    const vis = () => { if (document.visibilityState === "visible" && Date.now() - lastChk.current > 300000) checkUpdate(false); };
+    document.addEventListener("visibilitychange", vis);
+    return () => { clearTimeout(t); document.removeEventListener("visibilitychange", vis); };
   }, []);
   useEffect(() => {
     window.onbeforeunload = items.some(Boolean) ? e => { e.preventDefault(); e.returnValue = ""; } : null;
@@ -766,27 +965,44 @@ function App() {
   const drop = (o, nu) => { if (!o) return; [o.src, o.orig].forEach(u => { if (typeof u === "string" && u.indexOf("blob:") === 0 && !(nu && (nu.src === u || nu.orig === u))) URL.revokeObjectURL(u); }); };
   const clearAll = () => setItems(a => { a.forEach(x => drop(x, null)); return blank(); });
   const set = (i, v) => setItems(a => a.map((x, j) => { if (j !== i) return x; drop(x, v); return v; }));
-  const addFiles = (start, files) => {
+  const autoFix = (i, src) => {
+    const im = new Image();
+    im.onload = () => {
+      let p = null; try { p = autoParams(im); } catch (e) { p = null; }
+      p = { ...(p || { rot: 0, zoom: 1, ang: 0, ox: 0, oy: 0 }), enh: { ...ENH_OFF, on: true } };
+      let out = null;
+      try { const c = document.createElement("canvas"); c.width = 1200; c.height = 757; drawCard(c.getContext("2d"), im, 1200, 757, p, false); out = c.toDataURL("image/jpeg", 0.93); } catch (e) { out = null; }
+      if (!out) return;
+      setItems(a => { const x = a[i]; if (!x || x.src !== src) return a; const b = a.slice(); b[i] = { ...x, src: out, orig: src, p, rot: 0 }; return b; });
+    };
+    im.src = src;
+  };
+  const addFiles = (start, files, fresh) => {
     const urls = Array.from(files).filter(isImg).slice(0, cnt).map(f => URL.createObjectURL(f));
     if (!urls.length) return;
-    setItems(a => {
-      const b = a.slice();
-      drop(a[start], { src: urls[0] });
-      b[start] = { src: urls[0], rot: 0 };
-      let k = 1;
-      for (let j = 1; j < cnt && k < urls.length; j++) {
-        const i = (start + j) % cnt;
-        if (!b[i]) b[i] = { src: urls[k++], rot: 0 };
-      }
-      for (; k < urls.length; k++) URL.revokeObjectURL(urls[k]);
-      return b;
-    });
+    const cur = fresh ? blank() : itemsRef.current, placed = [[start, urls[0]]], taken = {}; taken[start] = true;
+    let k = 1;
+    for (let j = 1; j < cnt && k < urls.length; j++) { const i = (start + j) % cnt; if (!cur[i] && !taken[i]) { placed.push([i, urls[k++]]); taken[i] = true; } }
+    for (; k < urls.length; k++) URL.revokeObjectURL(urls[k]);
+    setItems(a => { const b = a.slice(); placed.forEach(pl => { drop(a[pl[0]], { src: pl[1] }); b[pl[0]] = { src: pl[1], rot: 0 }; }); return b; });
+    if (autoOn) placed.forEach(pl => autoFix(pl[0], pl[1]));
+  };
+  const bumpBw = d => setBw(b => Math.round(Math.min(190, Math.max(40, b + d)) * 10) / 10);
+  const bumpDw = (i, d) => setDw(a => a.map((x, j) => j === i ? Math.round(Math.max(20 - bw, Math.min(200 - bw, x + d)) * 10) / 10 : x));
+  const resetAll = () => { setN(4); setBw(BW0); setGx(GAP); setGy(GAP); setMx(5); setDw(Array(MAXN).fill(0)); setCut(true); setShowDate(true); setSizeLock(false); setAutoOn(true); setNp({ fit: "fit", per: 1, margin: 8 }); };
+  const doUpdate = async () => {
+    if (itemsRef.current.some(Boolean) && !window.confirm("Update se abhi lagi hui photos hat jayengi. Pehle print kar lein. Abhi update karein?")) return;
+    try {
+      if (window.caches) { const ks = await caches.keys(); await Promise.all(ks.map(k => caches.delete(k))); }
+      if (navigator.serviceWorker) { const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(r => r.unregister())); }
+    } catch (e) {}
+    location.reload();
   };
   const nameOf = i => "Card " + (Math.floor(i / 2) + 1) + (i % 2 ? " \u2013 Peeche" : " \u2013 Aage");
 
   const slots = items.slice(0, cnt).map((it, i) => h(Slot, {
-    key: i, idx: i, label: cnt <= 8 ? nameOf(i) : "Box " + (i + 1), item: it, bw, bh, cut, sel: sel === i, drag: dragI === i, off: !show[i],
-    onFile: src => set(i, { src, rot: 0 }),
+    key: i, idx: i, label: cnt <= 8 ? nameOf(i) : "Box " + (i + 1), item: it, bw: bw + dw[i], bh: (bw + dw[i]) * BH0 / BW0, cut, sel: sel === i, drag: dragI === i, off: !show[i],
+    onFile: src => { set(i, { src, rot: 0 }); if (autoOn) autoFix(i, src); },
     onFiles: fs => addFiles(i, fs),
     onRotate: () => set(i, { ...it, rot: it.rot + 90 }),
     onClear: () => set(i, null)
@@ -805,25 +1021,76 @@ function App() {
     if (cOK !== null) parts.push(sp("c", cOK, cOK ? "Column seedha \u2713" : "Column tedha \u2717 (" + Math.abs(cd).toFixed(1) + " mm " + (cd < 0 ? "left" : "right") + ")"));
     if (parts.length && statOn) statEl = h("div", { className: "stat" }, parts);
     if (dragI >= 0) {
+      const bwi = bw + dw[gi], bhi = bwi * BH0 / BW0;
       const gl = (210 - (colsU * bw + (colsU - 1) * gx)) / 2;
-      const t = TOP + Math.floor(gi / colsU) * (bh + gy) + (git.dy || 0);
-      const l = gl + (gi % colsU) * (bw + gx) + (git.dx || 0);
+      const t = TOP + Math.floor(gi / colsU) * (bh + gy) + (bh - bhi) / 2 + (git.dy || 0);
+      const l = gl + (gi % colsU) * (bw + gx) + (bw - bwi) / 2 + (git.dx || 0);
       const col = ok => ok === false ? "#e5484d" : ok === true ? "#2da44e" : "#1f6feb";
       const hl = (y, ok, k) => h("div", { key: k, className: "gl", style: { left: 0, right: 0, top: y + "mm", borderTop: ".4mm dashed " + col(ok) } });
       const vl = (x, ok, k) => h("div", { key: k, className: "gl", style: { top: 0, bottom: 0, left: x + "mm", borderLeft: ".4mm dashed " + col(ok) } });
-      guideEls = [hl(t, rOK, "a"), hl(t + bh, rOK, "b"), vl(l, cOK, "c"), vl(l + bw, cOK, "d")];
+      guideEls = [hl(t, rOK, "a"), hl(t + bhi, rOK, "b"), vl(l, cOK, "c"), vl(l + bwi, cOK, "d")];
     }
   }
   const hasAny = items.some(Boolean);
   const r1 = x => Math.round(x * 10) / 10;
+  const selRow = (sel >= 0 && sel < cnt) ? h("div", { className: "ctrl" },
+    h("span", null, "Card " + (sel + 1) + " size:"),
+    h("button", { disabled: sizeLock, onClick: () => bumpDw(sel, -0.5) }, "\u2212"),
+    h("span", null, r1(bw + dw[sel]) + " \u00d7 " + r1((bw + dw[sel]) * BH0 / BW0) + " mm"),
+    h("button", { disabled: sizeLock, onClick: () => bumpDw(sel, 0.5) }, "+"),
+    h("button", { disabled: sizeLock || !dw[sel], onClick: () => setDw(a => a.map((x, j) => j === sel ? 0 : x)) }, "Box jaisa")) : null;
+
+  const npAdd = files => { const add = Array.from(files).filter(isImg).map(f => ({ src: URL.createObjectURL(f), rot: 0 })); if (add.length) setNpItems(a => a.concat(add)); };
+  const npRotate = i => setNpItems(a => a.map((x, j) => j === i ? { ...x, rot: x.rot + 90 } : x));
+  const npRemove = i => setNpItems(a => { if (a[i]) URL.revokeObjectURL(a[i].src); return a.filter((_, j) => j !== i); });
+  const npClear = () => setNpItems(a => { a.forEach(x => URL.revokeObjectURL(x.src)); return []; });
+  const npSet = f => setNp(o => ({ ...o, ...f }));
+  const per = np.per, ncols = per === 4 ? 2 : 1, nrows = per === 1 ? 1 : 2, ng = per === 1 ? 0 : 6;
+  const ncw = (210 - 2 * np.margin - (ncols - 1) * ng) / ncols, nch = (296.6 - 2 * np.margin - (nrows - 1) * ng) / nrows;
+  const pages = []; for (let i = 0; i < npItems.length; i += per) pages.push(npItems.slice(i, i + per));
+  const normalPane = h("div", { className: "pane" + (tab === "normal" ? "" : " pane-off") },
+    h("div", { className: "nui" },
+      h("button", { onClick: () => npFile.current && npFile.current.click() }, "\ud83d\uddbc Photos chuno"),
+      h("input", { type: "file", accept: "image/*", multiple: true, hidden: true, ref: npFile, onChange: e => { npAdd(e.target.files); e.target.value = ""; } }),
+      h("button", { onClick: () => npCam.current && npCam.current.click() }, "\ud83d\udcf7 Camera"),
+      h("input", { type: "file", accept: "image/*", capture: "environment", hidden: true, ref: npCam, onChange: e => { npAdd(e.target.files); e.target.value = ""; } }),
+      h("button", { onClick: npClear, disabled: !npItems.length }, "Reset"),
+      h("button", { className: "p", onClick: () => window.print(), disabled: !npItems.length }, "Print")),
+    h("div", { className: "nui" },
+      h("span", null, "Ek page par:"),
+      [1, 2, 4].map(v => h("button", { key: v, className: per === v ? "p" : "", onClick: () => npSet({ per: v }) }, String(v))),
+      h("button", { className: np.fit === "fit" ? "p" : "", onClick: () => npSet({ fit: "fit" }) }, "Poori photo"),
+      h("button", { className: np.fit === "fill" ? "p" : "", onClick: () => npSet({ fit: "fill" }) }, "Page bhar do")),
+    h("div", { className: "nui" },
+      h("span", null, "Margin: " + r1(np.margin) + " mm"),
+      h("button", { onClick: () => npSet({ margin: Math.max(0, np.margin - 1) }) }, "\u2212"),
+      h("input", { type: "range", min: 0, max: 40, step: 1, value: np.margin, onChange: e => npSet({ margin: +e.target.value }) }),
+      h("button", { onClick: () => npSet({ margin: Math.min(40, np.margin + 1) }) }, "+")),
+    npItems.length > 0 && h("div", { className: "thumbs" }, npItems.map((x, i) => h("div", { key: x.src, className: "thumb" },
+      h("img", { src: x.src, alt: "", style: { transform: "rotate(" + x.rot + "deg)" } }),
+      h("div", null, h("button", { onClick: () => npRotate(i) }, "\u27f3"), h("button", { onClick: () => npRemove(i) }, "\u2715"))))),
+    npItems.length === 0 && h("div", { className: "hint", style: { padding: "24px 12px" } }, "Photos chuno. Har photo normal print ki tarah chhapegi: na box, na date, na text."),
+    h("div", { className: "npages" }, pages.map((pg, pi) =>
+      h("div", { key: pi, className: "nwrap", style: { width: sheetPx * scale, height: 297 * 96 / 25.4 * scale } },
+        h("div", { className: "nscaler", style: { transform: "scale(" + scale + ")" } },
+          h("div", { className: "npage", style: { gridTemplateColumns: "repeat(" + ncols + ", " + ncw + "mm)", gridTemplateRows: "repeat(" + nrows + ", " + nch + "mm)", justifyContent: "center", alignContent: "center", gap: ng + "mm" } },
+            pg.map((x, ci) => { const odd = x.rot % 180 !== 0;
+              return h("div", { key: ci, className: "ncell" }, h("img", { src: x.src, alt: "", draggable: false, style: { width: (odd ? nch : ncw) + "mm", height: (odd ? ncw : nch) + "mm", objectFit: np.fit === "fill" ? "cover" : "contain", transform: "translate(-50%,-50%) rotate(" + x.rot + "deg)" } })); })))))));
+  const ver = h("div", { className: "ver" }, "v" + APP_VER + " \u00b7 ", h("button", { onClick: () => checkUpdate(true) }, "\ud83d\udd04 Update check"), " " + chk);
 
   return h(React.Fragment, null,
+    upd && h("div", { className: "upd" }, "\ud83d\udd14 Naya update aaya hai!", h("button", { onClick: doUpdate }, "Update karo")),
+    h("div", { className: "tabs" },
+      h("button", { className: tab === "aadhaar" ? "p" : "", onClick: () => setTab("aadhaar") }, "Aadhaar cards"),
+      h("button", { className: tab === "normal" ? "p" : "", onClick: () => setTab("normal") }, "Normal print")),
+    h("div", { className: "pane" + (tab === "aadhaar" ? "" : " pane-off") },
     h("div", { className: "bar" },
       h("div", null, h("h1", null, "Aadhaar A4 Print"), h("small", null, "Photos \u2192 A4 page par cards")),
       h("div", { className: "btns" },
         h("button", { onClick: () => multi.current && multi.current.click() }, "\ud83d\uddbc Select photos"),
         h("input", { type: "file", accept: "image/*", multiple: true, hidden: true, ref: multi,
-          onChange: e => { const fs = Array.from(e.target.files); e.target.value = ""; clearAll(); addFiles(0, fs); } }),
+          onChange: e => { const fs = Array.from(e.target.files); e.target.value = ""; clearAll(); addFiles(0, fs, true); } }),
+        h("label", { className: "chk" }, h("input", { type: "checkbox", checked: autoOn, onChange: e => setAutoOn(e.target.checked) }), "\u26a1 Auto crop + clean"),
         h("label", { className: "chk" }, h("input", { type: "checkbox", checked: showDate, onChange: e => setShowDate(e.target.checked) }), "Date " + today),
         h("label", { className: "chk" }, h("input", { type: "checkbox", checked: cut, onChange: e => setCut(e.target.checked) }), "Cut lines"),
         h("button", { onClick: () => { const i = (sel >= 0 && sel < cnt && items[sel]) ? sel : items.slice(0, cnt).findIndex(Boolean); if (i >= 0) { setEditAuto(false); setEdit(i); } } }, "\u2702 Seedha/Crop"),
@@ -833,29 +1100,34 @@ function App() {
         h("button", { className: "p", onClick: () => window.print() }, "Print"))),
     h("div", { className: "ctrl" },
       h("span", null, "Kitne box:"),
-      h("button", { onClick: () => setN(Math.max(1, cnt - 1)), disabled: cnt <= 1 }, "\u2212"),
+      h("button", { onClick: () => setN(Math.max(1, cnt - 1)), disabled: cnt <= 1 || sizeLock }, "\u2212"),
       h("b", null, cnt),
-      h("button", { onClick: () => setN(Math.min(L.max, cnt + 1)), disabled: cnt >= L.max }, "+"),
+      h("button", { onClick: () => setN(Math.min(L.max, cnt + 1)), disabled: cnt >= L.max || sizeLock }, "+"),
       h("span", { style: { color: "var(--muted)" } }, "(is size par A4 mein max " + L.max + ")"),
-      h("button", { onClick: () => setN(L.max) }, "Max bharo")),
+      h("button", { onClick: () => setN(L.max), disabled: sizeLock }, "Max bharo")),
     h("div", { className: "ctrl" },
       h("span", null, "Box size:"),
-      h("input", { type: "range", min: 40, max: 190, step: 1, value: bw, onChange: e => setBw(+e.target.value) }),
+      h("button", { onClick: () => bumpBw(-0.5), disabled: sizeLock }, "\u2212"),
+      h("input", { type: "range", min: 40, max: 190, step: 0.5, value: bw, disabled: sizeLock, onChange: e => setBw(+e.target.value) }),
+      h("button", { onClick: () => bumpBw(0.5), disabled: sizeLock }, "+"),
       h("span", null, r1(bw) + " \u00d7 " + r1(bh) + " mm"),
-      h("button", { onClick: () => setBw(BW0) }, "Asli size")),
+      h("button", { onClick: () => setBw(BW0), disabled: sizeLock }, "Asli size"),
+      h("button", { className: sizeLock ? "p" : "", onClick: () => setSizeLock(v => !v) }, sizeLock ? "\ud83d\udd12 Size lock" : "\ud83d\udd13 Size lock")),
+    selRow,
     h("details", { className: "adv" },
       h("summary", null, "\u2699 Gap aur margin (jagah ka use)"),
       h("div", { className: "ctrl" },
         h("span", null, "Cards ke beech (left-right): " + r1(gx) + " mm"),
-        h("input", { type: "range", min: 0, max: 20, step: 0.5, value: gx, onChange: e => setGx(+e.target.value) })),
+        h("input", { type: "range", min: 0, max: 20, step: 0.5, value: gx, disabled: sizeLock, onChange: e => setGx(+e.target.value) })),
       h("div", { className: "ctrl" },
         h("span", null, "Rows ke beech (upar-neeche): " + r1(gy) + " mm"),
-        h("input", { type: "range", min: 0, max: 30, step: 0.5, value: gy, onChange: e => setGy(+e.target.value) })),
+        h("input", { type: "range", min: 0, max: 30, step: 0.5, value: gy, disabled: sizeLock, onChange: e => setGy(+e.target.value) })),
       h("div", { className: "ctrl" },
         h("span", null, "Kinare ka margin (left-right): " + r1(mx) + " mm"),
-        h("input", { type: "range", min: 0, max: 30, step: 0.5, value: mx, onChange: e => setMx(+e.target.value) })),
+        h("input", { type: "range", min: 0, max: 30, step: 0.5, value: mx, disabled: sizeLock, onChange: e => setMx(+e.target.value) })),
       h("div", { className: "ctrl" },
-        h("button", { onClick: () => { setGx(GAP); setGy(GAP); setMx(5); } }, "Default gap"),
+        h("button", { disabled: sizeLock, onClick: () => { setGx(GAP); setGy(GAP); setMx(5); } }, "Default gap"),
+        h("button", { onClick: () => { if (window.confirm("Saari settings (size, gap, margin, count, Normal print) default par aa jayengi. Theek hai?")) resetAll(); } }, "Saari settings default"),
         h("button", { onClick: () => setItems(a => a.map(x => x ? { ...x, dx: 0, dy: 0 } : x)) }, "Sab cards seedha (khiska hua hatao)")),
       h("div", { className: "note", style: { padding: "0 12px 8px" } }, "Dhyan: printer aksar kinare ke 3-5 mm nahi chhapta, margin bahut kam na karein.")),
     h("div", { className: "ctrl" },
@@ -873,6 +1145,9 @@ function App() {
             h("div", { className: "grid" + (locked ? " locked" : ""), ref: gridRef, style: { gridTemplateColumns: "repeat(" + colsU + ", " + bw + "mm)", gridAutoRows: bh + "mm", columnGap: gx + "mm", rowGap: gy + "mm" } }, slots)))))
     ,
     h("div", { className: "hint" }, "Card ko ungli se pakad kar khiskayein. Tedhi photo seedhi/crop karne ke liye card par do baar tap karein ya \u2702 dabayein. Print dialog me Margins: None, Scale: 100% rakhein."),
+    ),
+    normalPane,
+    ver,
     edit >= 0 && edit < cnt && items[edit] && h(Editor, { key: edit + (editAuto ? "a" : "n"), auto: editAuto, item: items[edit], onCancel: () => setEdit(-1), onDone: v => { set(edit, { ...items[edit], ...v, rot: 0 }); setEdit(-1); } }));
 }
 ReactDOM.createRoot(document.getElementById("root")).render(h(App));
