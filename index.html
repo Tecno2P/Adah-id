@@ -108,12 +108,20 @@ body{-webkit-tap-highlight-color:transparent}
 .npage{position:relative;width:210mm;height:297mm;background:#fff;box-shadow:0 2px 12px rgba(0,0,0,.25);display:grid;overflow:hidden}
 .ncell{position:relative;overflow:hidden}
 .ncell img{position:absolute;left:50%;top:50%;pointer-events:none}
+.txl{position:absolute;inset:0;pointer-events:none;z-index:6}
+.tx{position:absolute;pointer-events:auto;touch-action:none;cursor:move;padding:1mm;line-height:1.25;white-space:pre-wrap;color:#000;font-family:Arial,"Noto Sans Devanagari",sans-serif;max-width:190mm;user-select:none;-webkit-user-select:none}
+.tx.sel{outline:.3mm dashed #1f6feb}
+.tx:empty{min-width:24mm;min-height:6mm}
+.tx:empty::before{content:"Yahan likhein";color:#9aa}
 @media print{*,*::before,*::after{animation:none!important;transition:none!important}.adv,.tabs,.nui,.thumbs,.upd,.ver{display:none!important}
  .npages{display:block!important;padding:0!important;gap:0!important}
  .nwrap{width:auto!important;height:auto!important;overflow:visible!important;break-after:page;page-break-after:always}
  .nwrap:last-child{break-after:auto;page-break-after:auto}
  .nscaler{transform:none!important;width:auto!important;height:auto!important}
- .npage{box-shadow:none!important;margin:0!important;height:296.6mm!important}}
+ .npage{box-shadow:none!important;margin:0!important;height:296.6mm!important}
+ .tx{outline:none!important;cursor:auto!important}
+ .tx:empty{min-width:0!important;min-height:0!important}
+ .tx:empty::before{content:""!important}}
 @page{size:A4;margin:0}
 @media print{
  html,body{background:#fff!important}
@@ -439,7 +447,7 @@ const BW0 = 85.6, BH0 = 54, GAP = 10, MAXN = 32, TOP = 16;
 const blank = () => Array(MAXN).fill(null);
 
 const isImg = f => !!f && (/^image\//.test(f.type) || /\.(jpe?g|png|webp|gif|bmp|heic|heif)$/i.test(f.name || ""));
-const APP_VER = "6";
+const APP_VER = "7";
 const LS_KEY = "aadhaarPrint.settings";
 const loadSet = () => { try { const o = JSON.parse(localStorage.getItem(LS_KEY) || "{}"); return (o && typeof o === "object") ? o : {}; } catch (e) { return {}; } };
 const num = (v, lo, hi, d) => (typeof v === "number" && isFinite(v)) ? Math.min(hi, Math.max(lo, v)) : d;
@@ -494,7 +502,8 @@ function morph(m, w, h, grow) {
   }
   return o;
 }
-function detectCard(g0, w, h) {
+function detectCard(g0, w, h, prior) {
+  if (prior === undefined) prior = 1.585;
   const n = w * h, g = new Uint8ClampedArray(n);
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     let a = 0, c = 0;
@@ -536,12 +545,16 @@ function detectCard(g0, w, h) {
       const H = hullOf(pts); if (H.length < 3) continue;
       const r = minRect(H); if (r.S < 0.15 * Math.min(w, h) || r.area <= 0) continue;
       const rectness = polyArea(H) / r.area, ratio = r.L / r.S, af = r.area / n;
-      const asp = Math.exp(-0.5 * Math.pow(Math.log(ratio / 1.585) / 0.22, 2));
-      const score = Math.pow(rectness, 4) * asp * Math.sqrt(Math.min(af, 0.9));
+      const asp = prior ? Math.exp(-0.5 * Math.pow(Math.log(ratio / prior) / 0.22, 2)) : (ratio <= 2.4 ? 1 : Math.exp(-(ratio - 2.4)));
+      let mnx = 1e9, mxx = -1, mny = 1e9, mxy = -1;
+      for (let y = 0; y < h; y++) if (b.rmax[y] >= 0) { if (b.rmin[y] < mnx) mnx = b.rmin[y]; if (b.rmax[y] > mxx) mxx = b.rmax[y]; if (y < mny) mny = y; if (y > mxy) mxy = y; }
+      const touches = (mnx <= 1) + (mxx >= w - 2) + (mny <= 1) + (mxy >= h - 2);
+      const pen = (prior ? [1, 0.9, 0.6, 0, 0] : [1, 0.7, 0, 0, 0])[touches];
+      const score = Math.pow(rectness, 4) * asp * pen * Math.sqrt(Math.min(af, 0.9));
       if (rectness >= 0.8 && af < 0.94 && (!best || score > best.score)) best = { ...r, score, rectness };
     }
   }
-  return (best && best.score >= 0.25) ? best : null;
+  return (best && best.score >= (prior ? 0.25 : 0.3)) ? best : null;
 }
 function paramsFromRect(r, w, h, iw, ih) {
   const W = 1200, H = 757, kx = iw / w, ky = ih / h;
@@ -555,6 +568,16 @@ function paramsFromRect(r, w, h, iw, ih) {
   const ux = s * (vx * Math.cos(t) - vy * Math.sin(t)), uy = s * (vx * Math.sin(t) + vy * Math.cos(t));
   return { rot, ang, zoom: Math.min(8, Math.max(0.2, s / base)), ox: -ux / W, oy: -uy / H };
 }
+function paramsUpright(r, w, h, iw, ih) {
+  const kx = iw / w, ky = ih / h;
+  let a = r.ang * 180 / Math.PI, Wr = r.L * kx, Hr = r.S * kx;
+  if (Math.abs(a) > 45) { a = a > 0 ? a - 90 : a + 90; const t = Wr; Wr = Hr; Hr = t; }
+  const m = Math.min(1, 2000 / Math.max(Wr, Hr)), W = Math.max(16, Math.round(Wr * m)), H = Math.max(16, Math.round(Hr * m));
+  const th = -a, t = th * Math.PI / 180, s = m * 1.015, base = Math.min(W / iw, H / ih);
+  const vx = r.cx * kx - iw / 2, vy = r.cy * ky - ih / 2;
+  const ux = s * (vx * Math.cos(t) - vy * Math.sin(t)), uy = s * (vx * Math.sin(t) + vy * Math.cos(t));
+  return { W, H, p: { rot: 0, ang: th, zoom: Math.min(8, Math.max(0.2, s / base)), ox: -ux / W, oy: -uy / H } };
+}
 // --- AUTOCROP END
 function autoParams(img) {
   const iw = img.naturalWidth, ih = img.naturalHeight, k = Math.min(1, 320 / Math.max(iw, ih));
@@ -565,6 +588,41 @@ function autoParams(img) {
   for (let i = 0; i < g.length; i++) g[i] = .299 * d[4 * i] + .587 * d[4 * i + 1] + .114 * d[4 * i + 2];
   const r = detectCard(g, w, hh);
   return r ? paramsFromRect(r, w, hh, iw, ih) : null;
+}
+function autoDoc(img) {
+  const iw = img.naturalWidth, ih = img.naturalHeight, k = Math.min(1, 320 / Math.max(iw, ih));
+  const w = Math.max(8, Math.round(iw * k)), hh = Math.max(8, Math.round(ih * k));
+  const c = document.createElement("canvas"); c.width = w; c.height = hh;
+  const x = c.getContext("2d"); x.drawImage(img, 0, 0, w, hh);
+  const d = x.getImageData(0, 0, w, hh).data, g = new Uint8ClampedArray(w * hh);
+  for (let i = 0; i < g.length; i++) g[i] = .299 * d[4 * i] + .587 * d[4 * i + 1] + .114 * d[4 * i + 2];
+  const r = detectCard(g, w, hh, 0);
+  return r ? paramsUpright(r, w, hh, iw, ih) : null;
+}
+function bakeDoc(src) {
+  return new Promise(res => {
+    const im = new Image();
+    im.onload = () => {
+      try {
+        let r = null; try { r = autoDoc(im); } catch (e) { r = null; }
+        const k = Math.min(1, 2000 / Math.max(im.naturalWidth, im.naturalHeight));
+        const W = r ? r.W : Math.max(16, Math.round(im.naturalWidth * k)), H = r ? r.H : Math.max(16, Math.round(im.naturalHeight * k));
+        const p = { ...(r ? r.p : { rot: 0, zoom: 1, ang: 0, ox: 0, oy: 0 }), enh: { ...ENH_OFF, on: true } };
+        const c = document.createElement("canvas"); c.width = W; c.height = H;
+        drawCard(c.getContext("2d"), im, W, H, p, false);
+        res(c.toDataURL("image/jpeg", 0.92));
+      } catch (e) { res(null); }
+    };
+    im.onerror = () => res(null);
+    im.src = src;
+  });
+}
+function TextLayer({ list, scale, selId, onSel, onMove }) {
+  const drag = useRef(null);
+  const down = (e, x) => { e.stopPropagation(); onSel(x.id); drag.current = { id: x.id, px: e.clientX, py: e.clientY, x: x.x, y: x.y }; try { e.currentTarget.setPointerCapture(e.pointerId); } catch (er) {} };
+  const move = e => { const d = drag.current; if (!d) return; const k = 25.4 / 96 / (scale || 1); onMove(d.id, { x: Math.max(0, Math.min(205, d.x + (e.clientX - d.px) * k)), y: Math.max(0, Math.min(292, d.y + (e.clientY - d.py) * k)) }); };
+  const up = () => { drag.current = null; };
+  return h("div", { className: "txl" }, list.map(x => h("div", { key: x.id, className: "tx" + (x.id === selId ? " sel" : ""), style: { left: x.x + "mm", top: x.y + "mm", fontSize: x.sz + "pt", fontWeight: x.b ? 700 : 400 }, onPointerDown: e => down(e, x), onPointerMove: move, onPointerUp: up, onPointerCancel: up }, x.t)));
 }
 const calm = () => !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 
@@ -865,8 +923,11 @@ function App() {
   const [sizeLock, setSizeLock] = useState(!!S.sizeLock);
   const [autoOn, setAutoOn] = useState(S.autoOn !== false);
   const [tab, setTab] = useState(S.tab === "normal" ? "normal" : "aadhaar");
-  const [np, setNp] = useState(() => ({ fit: (S.np && S.np.fit === "fill") ? "fill" : "fit", per: (S.np && [1, 2, 4].indexOf(S.np.per) >= 0) ? S.np.per : 1, margin: num(S.np && S.np.margin, 0, 40, 8) }));
+  const [np, setNp] = useState(() => ({ fit: (S.np && S.np.fit === "fill") ? "fill" : "fit", per: (S.np && [1, 2, 4].indexOf(S.np.per) >= 0) ? S.np.per : 1, margin: num(S.np && S.np.margin, 0, 40, 8), auto: !!(S.np && S.np.auto) }));
   const [npItems, setNpItems] = useState([]);
+  const [texts, setTexts] = useState([]);
+  const [txSel, setTxSel] = useState(-1);
+  const txId = useRef(0), txInp = useRef(null), npBusy = useRef({});
   const [upd, setUpd] = useState(false);
   const [chk, setChk] = useState("");
   const lastChk = useRef(0), npFile = useRef(null), npCam = useRef(null);
@@ -897,6 +958,14 @@ function App() {
   useEffect(() => {
     try { localStorage.setItem(LS_KEY, JSON.stringify({ n, bw, gx, gy, mx, dw, sizeLock, autoOn, tab, np, cut, locked, showDate })); } catch (e) {}
   }, [n, bw, gx, gy, mx, dw, sizeLock, autoOn, tab, np, cut, locked, showDate]);
+  useEffect(() => {
+    if (!np.auto) return;
+    npItems.forEach(x => {
+      if (x.fx !== undefined || npBusy.current[x.src]) return;
+      npBusy.current[x.src] = true;
+      bakeDoc(x.src).then(out => setNpItems(a => a.map(y => y.src === x.src ? { ...y, fx: out || null } : y)));
+    });
+  }, [npItems, np.auto]);
   const checkUpdate = manual => {
     if (typeof fetch !== "function") return;
     if (navigator.onLine === false) { if (manual) setChk("Offline hain, internet chalu karein"); return; }
@@ -989,7 +1058,7 @@ function App() {
   };
   const bumpBw = d => setBw(b => Math.round(Math.min(190, Math.max(40, b + d)) * 10) / 10);
   const bumpDw = (i, d) => setDw(a => a.map((x, j) => j === i ? Math.round(Math.max(20 - bw, Math.min(200 - bw, x + d)) * 10) / 10 : x));
-  const resetAll = () => { setN(4); setBw(BW0); setGx(GAP); setGy(GAP); setMx(5); setDw(Array(MAXN).fill(0)); setCut(true); setShowDate(true); setSizeLock(false); setAutoOn(true); setNp({ fit: "fit", per: 1, margin: 8 }); };
+  const resetAll = () => { setN(4); setBw(BW0); setGx(GAP); setGy(GAP); setMx(5); setDw(Array(MAXN).fill(0)); setCut(true); setShowDate(true); setSizeLock(false); setAutoOn(true); setNp({ fit: "fit", per: 1, margin: 8, auto: false }); };
   const doUpdate = async () => {
     if (itemsRef.current.some(Boolean) && !window.confirm("Update se abhi lagi hui photos hat jayengi. Pehle print kar lein. Abhi update karein?")) return;
     try {
@@ -1048,26 +1117,45 @@ function App() {
   const per = np.per, ncols = per === 4 ? 2 : 1, nrows = per === 1 ? 1 : 2, ng = per === 1 ? 0 : 6;
   const ncw = (210 - 2 * np.margin - (ncols - 1) * ng) / ncols, nch = (296.6 - 2 * np.margin - (nrows - 1) * ng) / nrows;
   const pages = []; for (let i = 0; i < npItems.length; i += per) pages.push(npItems.slice(i, i + per));
+  const curKey = tab === "aadhaar" ? "a" : "n";
+  const addText = () => { const id = ++txId.current; setTexts(a => a.concat({ id, tab: curKey, page: 0, t: "", x: 20, y: curKey === "a" ? 8 : 20, sz: 14, b: false })); setTxSel(id); setTimeout(() => { if (txInp.current) txInp.current.focus(); }, 60); };
+  const setTx = (id, f) => setTexts(a => a.map(x => x.id === id ? { ...x, ...f } : x));
+  const delTx = id => setTexts(a => a.filter(x => x.id !== id));
+  const stx = texts.find(x => x.id === txSel && x.tab === curKey) || null;
+  const txRow = stx ? h("div", { className: "ctrl" },
+    h("textarea", { ref: txInp, rows: 2, value: stx.t, placeholder: "Yahan likhein...", style: { flex: 1, minWidth: 160, font: "inherit", padding: 6, borderRadius: 6, border: "1px solid var(--line)" }, onChange: e => setTx(stx.id, { t: e.target.value }) }),
+    h("button", { onClick: () => setTx(stx.id, { sz: Math.max(6, stx.sz - 1) }) }, "A\u2212"),
+    h("span", null, stx.sz + " pt"),
+    h("button", { onClick: () => setTx(stx.id, { sz: Math.min(72, stx.sz + 1) }) }, "A+"),
+    h("button", { className: stx.b ? "p" : "", onClick: () => setTx(stx.id, { b: !stx.b }) }, "B"),
+    curKey === "n" && h("button", { onClick: () => setTx(stx.id, { page: Math.max(0, stx.page - 1) }) }, "\u25c0"),
+    curKey === "n" && h("span", null, "Page " + (stx.page + 1)),
+    curKey === "n" && h("button", { onClick: () => setTx(stx.id, { page: Math.min(Math.max(0, pages.length - 1), stx.page + 1) }) }, "\u25b6"),
+    h("button", { onClick: () => delTx(stx.id) }, "\ud83d\uddd1 Hatao")) : null;
   const normalPane = h("div", { className: "pane" + (tab === "normal" ? "" : " pane-off") },
     h("div", { className: "nui" },
       h("button", { onClick: () => npFile.current && npFile.current.click() }, "\ud83d\uddbc Photos chuno"),
       h("input", { type: "file", accept: "image/*", multiple: true, hidden: true, ref: npFile, onChange: e => { npAdd(e.target.files); e.target.value = ""; } }),
       h("button", { onClick: () => npCam.current && npCam.current.click() }, "\ud83d\udcf7 Camera"),
       h("input", { type: "file", accept: "image/*", capture: "environment", hidden: true, ref: npCam, onChange: e => { npAdd(e.target.files); e.target.value = ""; } }),
+      h("button", { onClick: addText }, "\u270d Text jodo"),
       h("button", { onClick: npClear, disabled: !npItems.length }, "Reset"),
       h("button", { className: "p", onClick: () => window.print(), disabled: !npItems.length }, "Print")),
     h("div", { className: "nui" },
       h("span", null, "Ek page par:"),
       [1, 2, 4].map(v => h("button", { key: v, className: per === v ? "p" : "", onClick: () => npSet({ per: v }) }, String(v))),
       h("button", { className: np.fit === "fit" ? "p" : "", onClick: () => npSet({ fit: "fit" }) }, "Poori photo"),
-      h("button", { className: np.fit === "fill" ? "p" : "", onClick: () => npSet({ fit: "fill" }) }, "Page bhar do")),
+      h("button", { className: np.fit === "fill" ? "p" : "", onClick: () => npSet({ fit: "fill" }) }, "Page bhar do"),
+      h("label", { className: "chk" }, h("input", { type: "checkbox", checked: !!np.auto, onChange: e => npSet({ auto: e.target.checked }) }), "\u26a1 Auto crop + clean")),
     h("div", { className: "nui" },
       h("span", null, "Margin: " + r1(np.margin) + " mm"),
       h("button", { onClick: () => npSet({ margin: Math.max(0, np.margin - 1) }) }, "\u2212"),
       h("input", { type: "range", min: 0, max: 40, step: 1, value: np.margin, onChange: e => npSet({ margin: +e.target.value }) }),
       h("button", { onClick: () => npSet({ margin: Math.min(40, np.margin + 1) }) }, "+")),
+    tab === "normal" && txRow,
+    np.auto && npItems.some(x => x.fx === undefined) && h("div", { className: "hint", style: { padding: "6px 12px" } }, "\u26a1 Auto crop + clean ho raha hai..."),
     npItems.length > 0 && h("div", { className: "thumbs" }, npItems.map((x, i) => h("div", { key: x.src, className: "thumb" },
-      h("img", { src: x.src, alt: "", style: { transform: "rotate(" + x.rot + "deg)" } }),
+      h("img", { src: (np.auto && x.fx) ? x.fx : x.src, alt: "", style: { transform: "rotate(" + x.rot + "deg)" } }),
       h("div", null, h("button", { onClick: () => npRotate(i) }, "\u27f3"), h("button", { onClick: () => npRemove(i) }, "\u2715"))))),
     npItems.length === 0 && h("div", { className: "hint", style: { padding: "24px 12px" } }, "Photos chuno. Har photo normal print ki tarah chhapegi: na box, na date, na text."),
     h("div", { className: "npages" }, pages.map((pg, pi) =>
@@ -1075,7 +1163,8 @@ function App() {
         h("div", { className: "nscaler", style: { transform: "scale(" + scale + ")" } },
           h("div", { className: "npage", style: { gridTemplateColumns: "repeat(" + ncols + ", " + ncw + "mm)", gridTemplateRows: "repeat(" + nrows + ", " + nch + "mm)", justifyContent: "center", alignContent: "center", gap: ng + "mm" } },
             pg.map((x, ci) => { const odd = x.rot % 180 !== 0;
-              return h("div", { key: ci, className: "ncell" }, h("img", { src: x.src, alt: "", draggable: false, style: { width: (odd ? nch : ncw) + "mm", height: (odd ? ncw : nch) + "mm", objectFit: np.fit === "fill" ? "cover" : "contain", transform: "translate(-50%,-50%) rotate(" + x.rot + "deg)" } })); })))))));
+              return h("div", { key: ci, className: "ncell" }, h("img", { src: (np.auto && x.fx) ? x.fx : x.src, alt: "", draggable: false, style: { width: (odd ? nch : ncw) + "mm", height: (odd ? ncw : nch) + "mm", objectFit: np.fit === "fill" ? "cover" : "contain", transform: "translate(-50%,-50%) rotate(" + x.rot + "deg)" } })); }),
+            h(TextLayer, { list: texts.filter(x => x.tab === "n" && x.page === pi), scale, selId: txSel, onSel: setTxSel, onMove: setTx })))))));
   const ver = h("div", { className: "ver" }, "v" + APP_VER + " \u00b7 ", h("button", { onClick: () => checkUpdate(true) }, "\ud83d\udd04 Update check"), " " + chk);
 
   return h(React.Fragment, null,
@@ -1090,6 +1179,7 @@ function App() {
         h("button", { onClick: () => multi.current && multi.current.click() }, "\ud83d\uddbc Select photos"),
         h("input", { type: "file", accept: "image/*", multiple: true, hidden: true, ref: multi,
           onChange: e => { const fs = Array.from(e.target.files); e.target.value = ""; clearAll(); addFiles(0, fs, true); } }),
+        h("button", { onClick: addText }, "\u270d Text jodo"),
         h("label", { className: "chk" }, h("input", { type: "checkbox", checked: autoOn, onChange: e => setAutoOn(e.target.checked) }), "\u26a1 Auto crop + clean"),
         h("label", { className: "chk" }, h("input", { type: "checkbox", checked: showDate, onChange: e => setShowDate(e.target.checked) }), "Date " + today),
         h("label", { className: "chk" }, h("input", { type: "checkbox", checked: cut, onChange: e => setCut(e.target.checked) }), "Cut lines"),
@@ -1114,6 +1204,7 @@ function App() {
       h("button", { onClick: () => setBw(BW0), disabled: sizeLock }, "Asli size"),
       h("button", { className: sizeLock ? "p" : "", onClick: () => setSizeLock(v => !v) }, sizeLock ? "\ud83d\udd12 Size lock" : "\ud83d\udd13 Size lock")),
     selRow,
+    tab === "aadhaar" && txRow,
     h("details", { className: "adv" },
       h("summary", null, "\u2699 Gap aur margin (jagah ka use)"),
       h("div", { className: "ctrl" },
@@ -1142,7 +1233,8 @@ function App() {
           h("div", { className: "sheet", style: { paddingTop: TOP + "mm" } },
             showDate && h("div", { className: "dt" }, "Date: " + today),
             guideEls,
-            h("div", { className: "grid" + (locked ? " locked" : ""), ref: gridRef, style: { gridTemplateColumns: "repeat(" + colsU + ", " + bw + "mm)", gridAutoRows: bh + "mm", columnGap: gx + "mm", rowGap: gy + "mm" } }, slots)))))
+            h("div", { className: "grid" + (locked ? " locked" : ""), ref: gridRef, style: { gridTemplateColumns: "repeat(" + colsU + ", " + bw + "mm)", gridAutoRows: bh + "mm", columnGap: gx + "mm", rowGap: gy + "mm" } }, slots),
+          h(TextLayer, { list: texts.filter(x => x.tab === "a"), scale, selId: txSel, onSel: setTxSel, onMove: setTx })))))
     ,
     h("div", { className: "hint" }, "Card ko ungli se pakad kar khiskayein. Tedhi photo seedhi/crop karne ke liye card par do baar tap karein ya \u2702 dabayein. Print dialog me Margins: None, Scale: 100% rakhein."),
     ),
