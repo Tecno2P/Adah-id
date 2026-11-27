@@ -64,7 +64,14 @@ label.chk{font-size:14px;display:flex;gap:6px;align-items:center}
 button{transition:transform .12s var(--ease),background-color .18s,border-color .18s,opacity .2s}
 button:active:not(:disabled){transform:scale(.95)}
 @media (hover:hover){button:hover:not(:disabled){border-color:var(--accent)}}
-.stat{animation:fadeDown .22s var(--ease)}
+html,body{overflow-anchor:none}
+body{-webkit-tap-highlight-color:transparent}
+.stat{position:fixed;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom,0px));z-index:60;justify-content:center;border:1px solid var(--line);border-radius:10px;box-shadow:0 4px 14px rgba(0,0,0,.28);pointer-events:none;animation:fadeIn .15s ease}
+.grid.locked .slot,.slot.empty{touch-action:pan-y pinch-zoom}
+.grid.locked .slot{cursor:default}
+.adv{background:var(--surface);border-bottom:1px solid var(--line)}
+.adv summary{padding:8px 12px;font-size:14px;cursor:pointer}
+.adv .ctrl{border-bottom:none;padding-top:4px}
 .slot{animation:slotIn .32s var(--ease) backwards;transition:opacity .25s,box-shadow .2s,outline-color .2s,outline-width .2s}
 .slot.drag{box-shadow:0 8px 22px rgba(0,0,0,.35);z-index:3}
 .slot img{animation:imgIn .4s var(--ease)}
@@ -82,7 +89,7 @@ button:active:not(:disabled){transform:scale(.95)}
 @keyframes edIn{from{opacity:0;translate:0 28px;scale:.98}to{opacity:1;translate:0 0;scale:1}}
 @keyframes edOut{to{opacity:0;translate:0 28px;scale:.98}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
-@media print{*,*::before,*::after{animation:none!important;transition:none!important}}
+@media print{*,*::before,*::after{animation:none!important;transition:none!important}.adv{display:none!important}}
 @page{size:A4;margin:0}
 @media print{
  html,body{background:#fff!important}
@@ -410,10 +417,10 @@ const blank = () => Array(MAXN).fill(null);
 const isImg = f => !!f && (/^image\//.test(f.type) || /\.(jpe?g|png|webp|gif|bmp|heic|heif)$/i.test(f.name || ""));
 const calm = () => !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 
-function layoutOf(bw) {
+function layoutOf(bw, gx, gy, mx) {
   const bh = bw * BH0 / BW0;
-  const cols = Math.max(1, Math.floor((210 - 10 + GAP) / (bw + GAP)));
-  const rows = Math.max(1, Math.floor((297 - TOP - 8 + GAP) / (bh + GAP)));
+  const cols = Math.max(1, Math.floor((210 - 2 * mx + gx) / (bw + gx)));
+  const rows = Math.max(1, Math.floor((297 - TOP - 8 + gy) / (bh + gy)));
   return { bh, cols, rows, max: Math.min(MAXN, cols * rows) };
 }
 function nb(i, cols, n) {
@@ -680,6 +687,11 @@ function App() {
   const [show, setShow] = useState(() => Array(MAXN).fill(true));
   const [n, setN] = useState(4);
   const [bw, setBw] = useState(BW0);
+  const [gx, setGx] = useState(GAP);
+  const [gy, setGy] = useState(GAP);
+  const [mx, setMx] = useState(5);
+  const [statOn, setStatOn] = useState(false);
+  const statT = useRef(0);
   const [cut, setCut] = useState(true);
   const [sel, setSel] = useState(-1);
   const [locked, setLocked] = useState(false);
@@ -690,7 +702,7 @@ function App() {
   const [scale, setScale] = useState(1);
   const multi = useRef(null);
   const today = new Date().toLocaleDateString("en-GB");
-  const L = layoutOf(bw), bh = L.bh;
+  const L = layoutOf(bw, gx, gy, mx), bh = L.bh;
   const cnt = Math.min(n, L.max), colsU = Math.min(cnt, L.cols);
   const sheetPx = 210 * 96 / 25.4;
 
@@ -712,7 +724,7 @@ function App() {
       if (act || lockedRef.current || !t.closest) return false;
       const el = t.closest("[data-i]"); if (!el || t.closest("button")) return false;
       const i = +el.dataset.i, it = itemsRef.current[i]; if (!it) return false;
-      act = { i, x, y, dx: it.dx || 0, dy: it.dy || 0, type, moved: false }; setSel(i); setDragI(i); return true;
+      act = { i, x, y, dx: it.dx || 0, dy: it.dy || 0, type, moved: false }; setSel(i); setDragI(i); clearTimeout(statT.current); setStatOn(true); return true;
     };
     const move = (x, y) => {
       if (!act) return;
@@ -730,6 +742,7 @@ function App() {
         if (lastTap.i === act.i && now - lastTap.t < 450) { lastTap = { i: -1, t: 0 }; setEditAuto(false); setEdit(act.i); } else lastTap = { i: act.i, t: now };
       }
       act = null; setDragI(-1);
+      clearTimeout(statT.current); statT.current = setTimeout(() => setStatOn(false), 2500);
     };
     const ts = e => { const t = e.touches[0]; if (t && start(t.clientX, t.clientY, e.target, "t")) e.preventDefault(); };
     const tm = e => { if (act && act.type === "t") { e.preventDefault(); const t = e.touches[0]; if (t) move(t.clientX, t.clientY); } };
@@ -790,11 +803,11 @@ function App() {
     const sp = (k, ok, t) => h("span", { key: k, style: { color: ok ? "#2da44e" : "#e5484d", fontWeight: 600 } }, t);
     if (rOK !== null) parts.push(sp("r", rOK, rOK ? "Row seedha \u2713" : "Row tedha \u2717 (" + Math.abs(rd).toFixed(1) + " mm " + (rd < 0 ? "upar" : "neeche") + ")"));
     if (cOK !== null) parts.push(sp("c", cOK, cOK ? "Column seedha \u2713" : "Column tedha \u2717 (" + Math.abs(cd).toFixed(1) + " mm " + (cd < 0 ? "left" : "right") + ")"));
-    if (parts.length) statEl = h("div", { className: "stat" }, parts);
+    if (parts.length && statOn) statEl = h("div", { className: "stat" }, parts);
     if (dragI >= 0) {
-      const gl = (210 - (colsU * bw + (colsU - 1) * GAP)) / 2;
-      const t = TOP + Math.floor(gi / colsU) * (bh + GAP) + (git.dy || 0);
-      const l = gl + (gi % colsU) * (bw + GAP) + (git.dx || 0);
+      const gl = (210 - (colsU * bw + (colsU - 1) * gx)) / 2;
+      const t = TOP + Math.floor(gi / colsU) * (bh + gy) + (git.dy || 0);
+      const l = gl + (gi % colsU) * (bw + gx) + (git.dx || 0);
       const col = ok => ok === false ? "#e5484d" : ok === true ? "#2da44e" : "#1f6feb";
       const hl = (y, ok, k) => h("div", { key: k, className: "gl", style: { left: 0, right: 0, top: y + "mm", borderTop: ".4mm dashed " + col(ok) } });
       const vl = (x, ok, k) => h("div", { key: k, className: "gl", style: { top: 0, bottom: 0, left: x + "mm", borderLeft: ".4mm dashed " + col(ok) } });
@@ -830,6 +843,21 @@ function App() {
       h("input", { type: "range", min: 40, max: 190, step: 1, value: bw, onChange: e => setBw(+e.target.value) }),
       h("span", null, r1(bw) + " \u00d7 " + r1(bh) + " mm"),
       h("button", { onClick: () => setBw(BW0) }, "Asli size")),
+    h("details", { className: "adv" },
+      h("summary", null, "\u2699 Gap aur margin (jagah ka use)"),
+      h("div", { className: "ctrl" },
+        h("span", null, "Cards ke beech (left-right): " + r1(gx) + " mm"),
+        h("input", { type: "range", min: 0, max: 20, step: 0.5, value: gx, onChange: e => setGx(+e.target.value) })),
+      h("div", { className: "ctrl" },
+        h("span", null, "Rows ke beech (upar-neeche): " + r1(gy) + " mm"),
+        h("input", { type: "range", min: 0, max: 30, step: 0.5, value: gy, onChange: e => setGy(+e.target.value) })),
+      h("div", { className: "ctrl" },
+        h("span", null, "Kinare ka margin (left-right): " + r1(mx) + " mm"),
+        h("input", { type: "range", min: 0, max: 30, step: 0.5, value: mx, onChange: e => setMx(+e.target.value) })),
+      h("div", { className: "ctrl" },
+        h("button", { onClick: () => { setGx(GAP); setGy(GAP); setMx(5); } }, "Default gap"),
+        h("button", { onClick: () => setItems(a => a.map(x => x ? { ...x, dx: 0, dy: 0 } : x)) }, "Sab cards seedha (khiska hua hatao)")),
+      h("div", { className: "note", style: { padding: "0 12px 8px" } }, "Dhyan: printer aksar kinare ke 3-5 mm nahi chhapta, margin bahut kam na karein.")),
     h("div", { className: "ctrl" },
       h("span", null, "Print mein rakhein:"),
       Array.from({ length: cnt }, (_, i) =>
@@ -842,7 +870,7 @@ function App() {
           h("div", { className: "sheet", style: { paddingTop: TOP + "mm" } },
             showDate && h("div", { className: "dt" }, "Date: " + today),
             guideEls,
-            h("div", { className: "grid", ref: gridRef, style: { gridTemplateColumns: "repeat(" + colsU + ", " + bw + "mm)", gridAutoRows: bh + "mm" } }, slots)))))
+            h("div", { className: "grid" + (locked ? " locked" : ""), ref: gridRef, style: { gridTemplateColumns: "repeat(" + colsU + ", " + bw + "mm)", gridAutoRows: bh + "mm", columnGap: gx + "mm", rowGap: gy + "mm" } }, slots)))))
     ,
     h("div", { className: "hint" }, "Card ko ungli se pakad kar khiskayein. Tedhi photo seedhi/crop karne ke liye card par do baar tap karein ya \u2702 dabayein. Print dialog me Margins: None, Scale: 100% rakhein."),
     edit >= 0 && edit < cnt && items[edit] && h(Editor, { key: edit + (editAuto ? "a" : "n"), auto: editAuto, item: items[edit], onCancel: () => setEdit(-1), onDone: v => { set(edit, { ...items[edit], ...v, rot: 0 }); setEdit(-1); } }));
